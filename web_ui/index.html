@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DIFM-DOS Fleet Management System</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Use specific font to look premium -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <h2>DIFM<span class="highlight">-DOS</span></h2>
+            </div>
+            
+            <nav class="nav-menu">
+                <button id="btn-dashboard" class="nav-item active">Dashboard</button>
+                <button id="btn-network" class="nav-item">Network Graph</button>
+            </nav>
+
+            <div class="controls-panel">
+                <h3>Simulation Controls</h3>
+                <div class="control-group">
+                    <label>Scale (Deliveries):</label>
+                    <input type="range" id="input-deliveries" min="10" max="1000" value="100">
+                    <span id="label-deliveries">100</span>
+                </div>
+                
+                <button id="btn-run" class="primary-btn pulse">Run Simulation</button>
+                <div id="loader" class="loader hidden"></div>
+                <div id="status-text" class="status-msg">Ready</div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header>
+                <h1>Fleet Optimization Dashboard</h1>
+                <p>Distributed Intelligent Fleet Management & Delivery Optimization System</p>
+            </header>
+
+            <div class="stats-grid hidden" id="stats-dashboard">
+                <div class="stat-card">
+                    <h4>MPI Speedup ⚡</h4>
+                    <span id="val-speedup" class="stat-value">-- x</span>
+                </div>
+                <div class="stat-card">
+                    <h4>Parallel Time</h4>
+                    <span id="val-parallel" class="stat-value">-- s</span>
+                </div>
+                <div class="stat-card">
+                    <h4>Efficiency ⚙️</h4>
+                    <span id="val-efficiency" class="stat-value">-- %</span>
+                </div>
+                <div class="stat-card">
+                    <h4>Delayed Tasks Alerts</h4>
+                    <span class="stat-value alert" id="val-delayed">--</span>
+                </div>
+            </div>
+
+            <!-- Chart Row -->
+            <div class="chart-container hidden" id="chart-section">
+                <div class="chart-card">
+                    <h3>Execution Performance (Sequential vs MPI)</h3>
+                    <canvas id="performanceChart"></canvas>
+                </div>
+                
+                <div class="chart-card">
+                    <h3>Fuel Consumption Model</h3>
+                    <div class="kpi-value">
+                        <span id="val-fuel">--</span> <small>Liters Total</small>
+                    </div>
+                    <div class="subtext">Based on shortest-path weights and traffic costs.</div>
+                </div>
+            </div>
+
+            <!-- Placeholder for Graph Network (using D3 or basic custom rendered canvas in future) -->
+            <div class="network-container hidden" id="network-dashboard">
+                <div class="chart-card full-width">
+                    <h3>Live Road Network Nodes</h3>
+                    <div id="map-placeholder" class="map-placeholder">
+                        <canvas id="networkCanvas"></canvas>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
