@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DIFM-DOS TERMINAL</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syncopate:wght@400;700&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+    <div class="crt-overlay"></div>
+    <div class="app-container">
+        <!-- Sidebar / Control Frame -->
+        <aside class="sidebar brutal-border">
+            <div class="logo">
+                <h2>DIFM<span class="highlight">//DOS</span></h2>
+                <div class="sys-info">SYS.VER: 4.0.1_MPI</div>
+            </div>
+
+            <nav class="nav-menu">
+                <button id="btn-dashboard" class="nav-item active">[01] DASHBOARD</button>
+                <button id="btn-network" class="nav-item">[02] NETWORK_GRAPH</button>
+            </nav>
+
+            <div class="controls-panel brutal-box">
+                <div class="decor-line"></div>
+                <h3>EXEC_CONTROLS</h3>
+                <div class="control-group">
+                    <label>> SET_DELIVERIES: <span id="label-deliveries">100</span></label>
+                    <input type="range" id="input-deliveries" min="10" max="1000" value="100" class="brutal-slider">
+                </div>
+
+                <button id="btn-run" class="primary-btn glitch-hover">INIT_SIMULATION()</button>
+                <div class="status-container">
+                    <div id="loader" class="loader hidden"></div>
+                    <div id="status-text" class="status-msg">> _IDLE</div>
+                </div>
+            </div>
+            <div class="sidebar-decor-bottom">
+                <p>UPLINK_SECURE</p>
+                <div class="blink-dot"></div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="brutal-header">
+                <div class="header-top">
+                    <h1>FLEET_OPTIMIZATION_MODULE</h1>
+                    <div class="status-badge">ONLINE</div>
+                </div>
+                <p>> DISTRIBUTED INTELLIGENT FLEET MANAGEMENT & DELIVERY OPTIMIZATION SYSTEM</p>
+                <div class="header-decor"></div>
+            </header>
+
+            <div class="stats-grid hidden" id="stats-dashboard">
+                <div class="stat-card brutal-box">
+                    <div class="stat-label">MPI_SPEEDUP</div>
+                    <span id="val-speedup" class="stat-value flicker">-- x</span>
+                    <div class="corner bottom-right"></div>
+                </div>
+                <div class="stat-card brutal-box">
+                    <div class="stat-label">PARALLEL_TIME</div>
+                    <span id="val-parallel" class="stat-value">-- s</span>
+                    <div class="corner bottom-right"></div>
+                </div>
+                <div class="stat-card brutal-box">
+                    <div class="stat-label">EFFICIENCY</div>
+                    <span id="val-efficiency" class="stat-value">-- %</span>
+                    <div class="corner bottom-right"></div>
+                </div>
+                <div class="stat-card brutal-box alert-card">
+                    <div class="stat-label">DELAYED_TASKS</div>
+                    <span class="stat-value alert" id="val-delayed">--</span>
+                    <div class="corner bottom-right"></div>
+                </div>
+            </div>
+
+            <!-- Chart Row -->
+            <div class="chart-container hidden" id="chart-section">
+                <div class="chart-card brutal-box">
+                    <h3>PERFORMANCE_MATRIX <span class="chart-subtitle">(SEQ vs MPI)</span></h3>
+                    <div class="canvas-wrapper">
+                        <canvas id="performanceChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="chart-card brutal-box flex-column">
+                    <h3>FUEL_CONSUMPTION_MODEL</h3>
+                    <div class="kpi-value-container">
+                        <span id="val-fuel" class="kpi-value">--</span> <span class="unit">Liters</span>
+                    </div>
+                    <div class="subtext">> computed via shortest-path & traffic heuristic costs.</div>
+                    <div class="animated-bar-container">
+                        <div class="animated-bar"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Placeholder for Graph Network -->
+            <div class="network-container hidden" id="network-dashboard">
+                <div class="chart-card brutal-box full-width"
+                    style="height: 600px; display: flex; flex-direction: column;">
+                    <h3>LIVE_ROAD_NETWORK_NODES</h3>
+                    <div id="map-placeholder" class="map-placeholder" style="flex: 1; min-height: 500px;">
+                        <!-- SVG injected via D3 here -->
+                        <div class="scan-line-vertical"></div>
+                        <div class="grid-overlay"></div>
+                        <p class="placeholder-text" id="network-loading-text">> AWAITING_COORDINATE_DATA...</p>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+
+</html>
