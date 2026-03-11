@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from pathfinding import PathFinder
+from mpi_pool import MPIPool
 
 app = FastAPI(title="DIFM-DOS Python Pathfinding Microservice")
 
@@ -15,6 +16,13 @@ app.add_middleware(
 
 # Global Instance
 pathfinder = PathFinder(num_nodes=50, seed=42)
+mpi_pool = MPIPool(pathfinder)
+pathfinder.engine.mpi_pool = mpi_pool
+
+@app.on_event("shutdown")
+def shutdown_event():
+    mpi_pool.stop_workers()
+
 
 @app.get("/get-route")
 def get_route(src: int, dst: int):
@@ -43,7 +51,8 @@ def update_traffic(multiplier: float = 3.0):
     Applies new random traffic factors across the road network.
     """
     pathfinder.apply_traffic(multiplier)
-    return {"status": "success", "message": "Traffic updated"}
+    mpi_pool.sync_graph()
+    return {"status": "success", "message": "Traffic updated and synced across MPI cluster"}
 
 @app.get("/graph-data")
 def graph_data():
@@ -64,4 +73,10 @@ def get_active_deliveries(clear: bool = False):
     return {"deliveries": deliveries}
 
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
+    if mpi_pool.is_master():
+        print(f"Starting API Server on Master Node (Rank 0). Total pool size: {mpi_pool.size}")
+        # Disable reload when running MPI, to prevent subprocess forking issues
+        uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=False)
+    else:
+        # Worker node
+        mpi_pool.worker_loop()

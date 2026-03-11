@@ -43,6 +43,14 @@ class PathFinder:
             new_multiplier = self.random_state.uniform(1.0, max_multiplier)
             self.graph[u][v]['traffic_factor'] = new_multiplier
 
+    def apply_edge_updates(self, edge_updates):
+        """
+        Applies a dict of {(u,v): traffic_factor} to sync graphs across MPI nodes.
+        """
+        for (u, v), new_factor in edge_updates.items():
+            if self.graph.has_edge(u, v):
+                self.graph[u][v]['traffic_factor'] = new_factor
+
     def compute_shortest_path(self, src: int, dst: int, record_ui=True, priority="LOW"):
         """
         Runs Dijkstra to find the fastest route. Uses 'weight' = base_time * traffic_factor
