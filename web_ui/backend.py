@@ -22,70 +22,40 @@ app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 @app.get("/run-simulation")
 async def run_simulation(deliveries: int = 100):
     """
-    Kicks off the MPI job / Sequential script. 
-    Here we execute the compiled Python mpi4py binary and parse its stdout.
+    Submits a large burst of mock orders into the Live Engine.
     """
-    import subprocess
-    import re
-    import sys
-    
-    # Run the Python AI MPI executable
-    ai_dir = os.path.join(os.path.dirname(BASE_DIR), "python_ai")
-    executable = os.path.join(ai_dir, "run_mpi.py")
-    
-    # Build the command using mpiexec with 4 processes as an example
-    cmd = ["mpiexec", "-n", "4", sys.executable, executable]
-    
     try:
-        # Run the executable, capture stdout
-        result = subprocess.run(cmd, cwd=ai_dir, capture_output=True, text=True, check=True)
-        output = result.stdout
-        
-        # Parse the output using regex
-        perf_time_match = re.search(r"Parallel Execution Time:\s*([\d.]+)\s*seconds", output)
-        seq_time_match = re.search(r"Sequential Execution Time:\s*([\d.]+)\s*seconds", output)
-        total_del_match = re.search(r"Total Deliveries Processed:\s*(\d+)", output)
-        delayed_match = re.search(r"Total Delayed:\s*(\d+)", output)
-        fuel_match = re.search(r"Total Fuel Used:\s*([\d.]+)", output)
-        
-        parallel_time = float(perf_time_match.group(1)) if perf_time_match else 0.0
-        sequential_time = float(seq_time_match.group(1)) if seq_time_match else 0.0
-        total_deliveries = int(total_del_match.group(1)) if total_del_match else deliveries
-        delayed = int(delayed_match.group(1)) if delayed_match else 0
-        fuel_used = float(fuel_match.group(1)) if fuel_match else 0.0
-        
-        speedup = sequential_time / parallel_time if parallel_time > 0 else 0
-        efficiency = speedup / 4.0 # 4 processes
-        
-        metrics = {
-            "metrics": {
-                "parallel_time": parallel_time,
-                "sequential_time": sequential_time,
-                "speedup": speedup,
-                "efficiency": efficiency,
-                "total_deliveries": total_deliveries,
-                "delayed": delayed,
-                "fuel_used": fuel_used
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"http://127.0.0.1:8000/bulk-orders?count={deliveries}")
+            return resp.json()
+    except Exception as e:
+        print(f"Failed to submit orders: {e}")
+        return {"status": "error"}
+
+@app.get("/system-stats")
+async def fetch_system_stats():
+    """
+    Proxy to the live Python AI Engine's real-time state.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get("http://127.0.0.1:8000/engine-state")
+            data = resp.json()
+            
+            # Format to match the UI's expected 'metrics' envelope
+            return {
+                "metrics": {
+                    "pending_orders": data.get("pending_orders", 0),
+                    "active_vehicles": data.get("active_vehicles", 0),
+                    "completed_deliveries": data.get("completed_deliveries", 0),
+                    "delayed": data.get("delayed_tasks", 0),
+                    "fuel_used": data.get("total_fuel", 0.0),
+                    "recent_logs": data.get("recent_logs", [])
+                }
             }
-        }
-        return metrics
-        
-    except subprocess.CalledProcessError as e:
-        # Fallback to mock data if the executable isn't built yet
-        print(f"Failed to run executable. Ensure it's compiled: {e}")
-        import random
-        mock_metrics = {
-            "metrics": {
-                "parallel_time": random.uniform(2.5, 4.0),
-                "sequential_time": random.uniform(8.0, 12.0),
-                "speedup": random.uniform(2.0, 3.5),
-                "efficiency": random.uniform(0.6, 0.9),
-                "total_deliveries": deliveries,
-                "delayed": random.randint(5, 15),
-                "fuel_used": random.uniform(1000.0, 1500.0)
-            }
-        }
-        return mock_metrics
+    except Exception as e:
+        return {"metrics": {"pending_orders": 0, "active_vehicles": 0, "completed_deliveries": 0, "delayed": 0, "fuel_used": 0.0, "recent_logs": []}}
+
 
 @app.get("/graph-status")
 async def fetch_graph_status():

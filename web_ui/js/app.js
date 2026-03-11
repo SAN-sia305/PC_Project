@@ -66,7 +66,12 @@ document.addEventListener('DOMContentLoaded', () => {
         labelDeliveries.textContent = e.target.value;
     });
 
+    let pollingInterval = null;
+    let isSimulating = false;
+
     btnRun.addEventListener('click', async () => {
+        if (isSimulating) return;
+
         // UI Reset
         btnRun.disabled = true;
         btnRun.innerText = "EXECUTING...";
@@ -77,16 +82,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
         statusText.style.color = 'var(--text-color)';
         statusText.textContent = "> INITIATING MPI SUBROUTINES...";
+        
+        const terminalLogs = document.getElementById('terminal-logs');
+        if (terminalLogs) terminalLogs.innerHTML = "";
 
         try {
-            // Trigger Backend Simulation
-            const response = await fetch(`http://127.0.0.1:8080/run-simulation?deliveries=${inputDeliveries.value}`);
-            const data = await response.json();
+            // Initiate Bulk Orders on backend
+            await fetch(`http://127.0.0.1:8080/run-simulation?deliveries=${inputDeliveries.value}`);
 
-            // Build metrics output
-            setTimeout(() => {
-                updateDash(data.metrics);
-            }, 800); // Artificial delay to let animations play out
+            // Reveal Live Dashboard
+            statsBoard.classList.remove('hidden');
+            if (!btnDashboard.classList.contains('active')) {
+                networkSection.classList.remove('hidden');
+            }
+            
+            statusText.style.color = 'var(--neon-green)';
+            statusText.textContent = "> SYSTEM LIVE. POLLING RULE ENGINE...";
+            
+            if(!pollingInterval) {
+                pollingInterval = setInterval(pollSystemStats, 1500);
+            }
         } catch (error) {
             statusText.style.color = 'var(--neon-red)';
             glitchText(statusText, "> ERR: SYS_CORE_OFFLINE");
@@ -94,91 +109,72 @@ document.addEventListener('DOMContentLoaded', () => {
         } finally {
             setTimeout(() => {
                 btnRun.disabled = false;
-                btnRun.innerText = "INIT_SIMULATION()";
+                btnRun.innerText = "INJECT_MORE_ORDERS()";
                 loader.classList.add('hidden');
             }, 800);
         }
     });
 
-    function updateDash(metrics) {
-        // Render Panels
-        statsBoard.classList.remove('hidden');
+    async function pollSystemStats() {
+        try {
+            const response = await fetch("http://127.0.0.1:8080/system-stats");
+            const data = await response.json();
+            const metrics = data.metrics;
 
-        if (btnDashboard.classList.contains('active')) {
-            chartSection.classList.remove('hidden');
-        } else {
-            networkSection.classList.remove('hidden');
-        }
+            // Update Numeric Dash
+            vSpeedup.innerText = metrics.pending_orders; // Re-using DOM slot for "Pending"
+            vSpeedup.previousElementSibling.innerText = "ORDERS_PENDING";
+            
+            vParallel.innerText = metrics.active_vehicles; // Re-using DOM slot for "Active"
+            vParallel.previousElementSibling.innerText = "ACTIVE_DRIVERS";
+            
+            vEfficiency.innerText = metrics.completed_deliveries; // Re-using DOM slot for "Completed"
+            vEfficiency.previousElementSibling.innerText = "DELIVERIES_COMPLETED";
+            
+            vDelayed.innerText = metrics.delayed;
+            vFuel.innerText = metrics.fuel_used.toFixed(0);
 
-        statusText.style.color = 'var(--neon-green)';
-        statusText.textContent = "> JOB_COMPLETE. DATA_WRITTEN.";
-
-        // Update Text
-        glitchText(vSpeedup, `${metrics.speedup.toFixed(2)}x`);
-        glitchText(vParallel, `${metrics.parallel_time.toFixed(2)}s`);
-        glitchText(vEfficiency, `${(metrics.efficiency * 100).toFixed(1)}%`);
-        glitchText(vDelayed, `${metrics.delayed}`);
-        glitchText(vFuel, `${metrics.fuel_used.toFixed(0)}`);
-
-        renderChart(metrics.sequential_time, metrics.parallel_time);
-    }
-
-    function renderChart(seqTime, parTime) {
-        const ctx = document.getElementById('performanceChart').getContext('2d');
-
-        if (performanceChartInstance) {
-            performanceChartInstance.destroy();
-        }
-
-        Chart.defaults.color = '#888';
-        Chart.defaults.font.family = "'Share Tech Mono', monospace";
-        Chart.defaults.borderColor = '#222';
-
-        performanceChartInstance = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: ['SEQ_EXEC', 'MPI_DISTRIBUTED'],
-                datasets: [{
-                    label: 'EXEC_TIME (s)',
-                    data: [seqTime, parTime],
-                    backgroundColor: [
-                        'rgba(255, 0, 60, 0.6)',
-                        'rgba(0, 255, 65, 0.8)'
-                    ],
-                    borderColor: [
-                        '#ff003c',
-                        '#00ff41'
-                    ],
-                    borderWidth: 2,
-                    borderRadius: 0, // brutally square
-                    barPercentage: 0.6
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        backgroundColor: '#050505',
-                        titleColor: '#00ff41',
-                        bodyColor: '#fff',
-                        borderColor: '#00ff41',
-                        borderWidth: 1,
-                        cornerRadius: 0
-                    }
-                },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        grid: { color: '#222' }
-                    },
-                    x: {
-                        grid: { display: false }
+            // Handle Terminal Logs
+            const terminalLogs = document.getElementById('terminal-logs');
+            if(terminalLogs && metrics.recent_logs && metrics.recent_logs.length > 0) {
+                metrics.recent_logs.forEach(msg => {
+                    const el = document.createElement("div");
+                    let formatted = messageFormatter(msg);
+                    el.className = getClassForMsg(msg);
+                    el.innerHTML = formatted;
+                    terminalLogs.appendChild(el);
+                });
+                
+                // Auto-scroll logic
+                if(terminalLogs.children.length > 150) {
+                    for(let i=0; i < 50; i++) {
+                        terminalLogs.removeChild(terminalLogs.firstChild);
                     }
                 }
+                terminalLogs.scrollTop = terminalLogs.scrollHeight;
             }
-        });
+
+        } catch (e) {
+            console.warn("Poll missed");
+        }
+    }
+
+    function messageFormatter(msg) {
+        if(msg.includes("[EVENT]")) return msg.replace("[EVENT]", `<span style="color:var(--text-color)">[EVENT]</span>`);
+        if(msg.includes("[RULE FIRED]")) {
+            let out = msg.replace("[RULE FIRED]", `<span style="color:#0ff">[RULE FIRED]</span>`);
+            if (out.includes("delayed by Traffic")) {
+                out = `<span style="color:var(--neon-red)">${out}</span>`;
+            }
+            return out;
+        }
+        return msg;
+    }
+    
+    function getClassForMsg(msg) {
+        if(msg.includes("delayed by Traffic")) return "log-line alert";
+        if(msg.includes("[RULE FIRED]")) return "log-line fired";
+        return "log-line event";
     }
 
     // MapLibre GL JS WebGL Geographic Map Implementation

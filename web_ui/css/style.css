@@ -439,10 +439,63 @@ body {
     margin-top: 2rem;
     position: relative;
     z-index: 2;
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 1.5rem;
+}
+
+.terminal-container {
+    background-color: rgba(5, 5, 5, 0.9);
+    padding: 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--neon-green);
+    overflow-y: auto;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.terminal-header {
+    border-bottom: 1px dashed #333;
+    padding-bottom: 0.5rem;
+    margin-bottom: 0.8rem;
+    color: #888;
+}
+
+.log-scroll {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    scrollbar-width: thin;
+    scrollbar-color: var(--neon-green) #111;
+}
+
+.log-scroll::-webkit-scrollbar {
+    width: 6px;
+}
+.log-scroll::-webkit-scrollbar-thumb {
+    background-color: var(--neon-green);
+}
+
+.log-line {
+    word-break: break-word;
+    opacity: 0.9;
+}
+.log-line.event {
+    color: #fff;
+}
+.log-line.fired {
+    color: var(--neon-green);
+}
+.log-line.alert {
+    color: var(--neon-red);
 }
 
 .full-width {
-    grid-column: span 2;
+    grid-column: span 1;
 }
 
 .map-placeholder {

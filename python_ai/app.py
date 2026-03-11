@@ -1,8 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from pathfinding import PathFinder
 from mpi_pool import MPIPool
+import asyncio
+import random
 
 app = FastAPI(title="DIFM-DOS Python Pathfinding Microservice")
 
@@ -19,8 +21,43 @@ pathfinder = PathFinder(num_nodes=50, seed=42)
 mpi_pool = MPIPool(pathfinder)
 pathfinder.engine.mpi_pool = mpi_pool
 
+# Keep track of simulation stats globally
+server_stats = {
+    "total_deliveries_injected": 0,
+    "total_delayed": 0,
+    "fuel_used": 0.0
+}
+
+engine_running = False
+
+async def function_loop():
+    while engine_running:
+        pathfinder.engine.evaluate_rules()
+        
+        # Accumulate metrics based on engine state
+        for v in pathfinder.engine.vehicles:
+            if v.active_order and v.active_order.status == "COMPLETED":
+                # Rough mock fuel conversion 
+                server_stats["fuel_used"] += v.eta_minutes * 0.15 
+        
+        # Count delayed 
+        for o in pathfinder.engine.pending_orders:
+            if o.status == "DELAYED":
+                server_stats["total_delayed"] += 1
+                
+        await asyncio.sleep(2) # Tick the engine every 2 seconds
+
+@app.on_event("startup")
+async def startup_event():
+    global engine_running
+    if mpi_pool.is_master():
+        engine_running = True
+        asyncio.create_task(function_loop())
+
 @app.on_event("shutdown")
 def shutdown_event():
+    global engine_running
+    engine_running = False
     mpi_pool.stop_workers()
 
 
@@ -60,6 +97,51 @@ def graph_data():
     Returns the graph structure for the Web UI layer visualization.
     """
     return pathfinder.get_graph_data()
+
+@app.get("/bulk-orders")
+def bulk_orders(count: int = 100):
+    """
+    Injects hundreds of new mock orders into the Live Engine instantly.
+    """
+    for _ in range(count):
+        src = random.randint(0, pathfinder.num_nodes - 1)
+        dst = random.randint(0, pathfinder.num_nodes - 1)
+        while dst == src:
+            dst = random.randint(0, pathfinder.num_nodes - 1)
+            
+        priority = "HIGH" if random.random() > 0.8 else "LOW"
+        pathfinder.engine.submit_order(src, dst, priority)
+        
+    server_stats["total_deliveries_injected"] += count
+    return {"status": "success", "orders_injected": count}
+
+@app.get("/engine-state")
+def get_engine_state():
+    """
+    Returns the real-time aggregated metrics and the most recent rule engine logs for UI display.
+    """
+    pending = len(pathfinder.engine.pending_orders)
+    
+    assigned_count = 0
+    completed_count = 0
+    
+    # Calculate how many vehicles are currently working
+    for v in pathfinder.engine.vehicles:
+        if not v.capacity_available:
+            assigned_count += 1
+            
+    # Extract unread logs and clear the log buffer
+    logs = list(pathfinder.engine.logs)
+    pathfinder.engine.logs.clear()
+    
+    return {
+        "pending_orders": pending,
+        "active_vehicles": assigned_count,
+        "completed_deliveries": server_stats["total_deliveries_injected"] - pending - assigned_count,
+        "delayed_tasks": server_stats["total_delayed"],
+        "total_fuel": server_stats["fuel_used"],
+        "recent_logs": logs
+    }
 
 @app.get("/active-deliveries")
 def get_active_deliveries(clear: bool = False):
