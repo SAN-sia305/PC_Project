@@ -7,6 +7,8 @@ class PathFinder:
         self.num_nodes = num_nodes
         self.graph = nx.Graph()
         self.random_state = random.Random(seed)
+        
+        # DB_TODO: Fetch/Push active routing states to MongoDB 'routes' collection
         self.active_deliveries = [] # Track real-time routes
         self._generate_mock_graph()
         self.engine = RuleEngine(self)
@@ -21,6 +23,7 @@ class PathFinder:
         # Barabasi-Albert guarantees a single connected component
         self.graph = nx.barabasi_albert_graph(self.num_nodes, 3, seed=self.random_state.randint(0, 1000))
         
+        # DB_TODO: Fetch map topological constraints from MongoDB 'traffic_conditions' or 'routes' collection instead of hardcoding bounding box.
         # Approximate Bounding Box for Tamil Nadu, India
         LAT_MIN, LAT_MAX = 8.5, 13.5
         LON_MIN, LON_MAX = 76.2, 80.3

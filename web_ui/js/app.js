@@ -88,7 +88,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             // Initiate Bulk Orders on backend
-            await fetch(`http://127.0.0.1:8080/run-simulation?deliveries=${inputDeliveries.value}`);
+            await fetch(`http://127.0.0.1:8090/run-simulation?deliveries=${inputDeliveries.value}`);
 
             // Reveal Live Dashboard
             statsBoard.classList.remove('hidden');
@@ -117,7 +117,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function pollSystemStats() {
         try {
-            const response = await fetch("http://127.0.0.1:8080/system-stats");
+            const response = await fetch("http://127.0.0.1:8090/system-stats");
             const data = await response.json();
             const metrics = data.metrics;
 
@@ -185,7 +185,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const loadingText = document.getElementById('network-loading-text');
 
         try {
-            const response = await fetch('http://127.0.0.1:8080/graph-status');
+            const response = await fetch('http://127.0.0.1:8090/graph-status');
             const data = await response.json();
 
             if (loadingText) loadingText.remove();
@@ -319,7 +319,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         async function pollDeliveries() {
             try {
-                const res = await fetch("http://127.0.0.1:8080/active-deliveries");
+                const res = await fetch("http://127.0.0.1:8090/active-deliveries");
                 const deliveryData = await res.json();
 
                 if (deliveryData.deliveries && deliveryData.deliveries.length > 0) {

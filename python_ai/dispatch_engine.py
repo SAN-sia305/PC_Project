@@ -21,8 +21,15 @@ class Vehicle:
 class RuleEngine:
     def __init__(self, pathfinder_ref):
         self.pathfinder = pathfinder_ref # Reference to query costs
+        
+        # DB_TODO: Fetch vehicles from MongoDB 'vehicles' collection. 
+        # The '0' below represents a hard-coded starting location node. This should ideally be fetched from DB.
         self.vehicles = [Vehicle(i, 0) for i in range(5)] # Mock 5 drivers
+        
+        # DB_TODO: Fetch/Push pending deliveries to MongoDB 'deliveries' collection
         self.pending_orders = []
+        
+        # DB_TODO: Push event logs to MongoDB 'events' collection
         self.logs = []
 
     def submit_order(self, src, dst, priority="LOW"):

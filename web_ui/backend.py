@@ -83,4 +83,4 @@ async def fetch_active_deliveries():
         return {"deliveries": []}
 
 if __name__ == "__main__":
-    uvicorn.run("backend:app", host="127.0.0.1", port=8080, reload=True)
+    uvicorn.run("backend:app", host="127.0.0.1", port=8090, reload=True)

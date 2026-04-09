@@ -21,6 +21,7 @@ pathfinder = PathFinder(num_nodes=50, seed=42)
 mpi_pool = MPIPool(pathfinder)
 pathfinder.engine.mpi_pool = mpi_pool
 
+# DB_TODO: Move tracking from memory dict to MongoDB 'performance_metrics' collection
 # Keep track of simulation stats globally
 server_stats = {
     "total_deliveries_injected": 0,
