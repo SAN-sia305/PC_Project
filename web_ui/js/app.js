@@ -22,6 +22,30 @@ document.addEventListener('DOMContentLoaded', () => {
     const vFuel = document.getElementById('val-fuel');
 
     let performanceChartInstance = null;
+    
+    // Initialize Chart.js Benchmarking Visualization
+    const ctx = document.getElementById('performanceChart');
+    if (ctx) {
+        performanceChartInstance = new Chart(ctx.getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Sequential (Est)', data: [], borderColor: '#ff003c', tension: 0.1 },
+                    { label: 'Parallel (MPI)', data: [], borderColor: '#00ff41', tension: 0.1 }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { beginAtZero: true, grid: { color: '#333' }, title: {display: true, text: 'Execution Time (s)'} },
+                    x: { grid: { display: false } }
+                },
+                animation: false // No animation for live updates
+            }
+        });
+    }
 
     // Custom glitch characters effect
     function glitchText(element, finalValue) {
@@ -121,15 +145,35 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
             const metrics = data.metrics;
 
-            // Update Numeric Dash
-            vSpeedup.innerText = metrics.pending_orders; // Re-using DOM slot for "Pending"
-            vSpeedup.previousElementSibling.innerText = "ORDERS_PENDING";
+            // Update Numeric Dash with TRUE MPI Metrics
+            let speedup = 1.0;
+            if (metrics.parallel_time > 0) {
+                speedup = metrics.seq_time / metrics.parallel_time;
+            }
+            vSpeedup.innerText = speedup.toFixed(2) + "x";
+            vSpeedup.previousElementSibling.innerText = "MPI_SPEEDUP";
             
-            vParallel.innerText = metrics.active_vehicles; // Re-using DOM slot for "Active"
-            vParallel.previousElementSibling.innerText = "ACTIVE_DRIVERS";
+            vParallel.innerText = metrics.parallel_time.toFixed(4) + "s";
+            vParallel.previousElementSibling.innerText = "PARALLEL_TIME";
             
-            vEfficiency.innerText = metrics.completed_deliveries; // Re-using DOM slot for "Completed"
+            // Re-using Efficiency DOM slot to show Completed deliveries (since it's a useful business metric)
+            vEfficiency.innerText = metrics.completed_deliveries;
             vEfficiency.previousElementSibling.innerText = "DELIVERIES_COMPLETED";
+            
+            // Update Live Performance Chart
+            if(performanceChartInstance && (metrics.seq_time > 0 || metrics.parallel_time > 0)) {
+                const now = new Date().toLocaleTimeString();
+                performanceChartInstance.data.labels.push(now);
+                performanceChartInstance.data.datasets[0].data.push(metrics.seq_time.toFixed(4));
+                performanceChartInstance.data.datasets[1].data.push(metrics.parallel_time.toFixed(4));
+                
+                if(performanceChartInstance.data.labels.length > 20) {
+                    performanceChartInstance.data.labels.shift();
+                    performanceChartInstance.data.datasets[0].data.shift();
+                    performanceChartInstance.data.datasets[1].data.shift();
+                }
+                performanceChartInstance.update();
+            }
             
             vDelayed.innerText = metrics.delayed;
             vFuel.innerText = metrics.fuel_used.toFixed(0);

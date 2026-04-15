@@ -4,8 +4,32 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 import httpx
 import asyncio
+import os
+from dotenv import load_dotenv
+from pymongo import MongoClient
+
+# Load environment variables
+load_dotenv()
 
 app = FastAPI(title="DIFM-DOS Web Interface Backend")
+
+# --- Database Setup ---
+MONGO_URI = os.getenv("MONGO_URI", "")
+mongodb_client = None
+db = None
+
+if MONGO_URI:
+    try:
+        # Wait up to 5 seconds for a connection
+        mongodb_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        mongodb_client.admin.command("ping")
+        db = mongodb_client["pc_project_db"]
+        print("✅ Successfully connected to MongoDB Atlas!")
+    except Exception as e:
+        print(f"❌ Failed to connect to MongoDB: {e}")
+else:
+    print("⚠️ WARNING: MONGO_URI not found in .env file.")
+# ----------------------
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,9 +39,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-import os
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
+
 
 @app.get("/run-simulation")
 async def run_simulation(deliveries: int = 100):
@@ -50,11 +72,13 @@ async def fetch_system_stats():
                     "completed_deliveries": data.get("completed_deliveries", 0),
                     "delayed": data.get("delayed_tasks", 0),
                     "fuel_used": data.get("total_fuel", 0.0),
+                    "parallel_time": data.get("last_parallel_time", 0.0),
+                    "seq_time": data.get("last_seq_time", 0.0),
                     "recent_logs": data.get("recent_logs", [])
                 }
             }
     except Exception as e:
-        return {"metrics": {"pending_orders": 0, "active_vehicles": 0, "completed_deliveries": 0, "delayed": 0, "fuel_used": 0.0, "recent_logs": []}}
+        return {"metrics": {"pending_orders": 0, "active_vehicles": 0, "completed_deliveries": 0, "delayed": 0, "fuel_used": 0.0, "parallel_time": 0.0, "seq_time": 0.0, "recent_logs": []}}
 
 
 @app.get("/graph-status")
@@ -81,6 +105,11 @@ async def fetch_active_deliveries():
             return resp.json()
     except Exception:
         return {"deliveries": []}
+
+import os
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Map the root URL to serve static files from the web_ui directory
+app.mount("/", StaticFiles(directory=BASE_DIR, html=True), name="web_ui")
 
 if __name__ == "__main__":
     uvicorn.run("backend:app", host="127.0.0.1", port=8090, reload=True)

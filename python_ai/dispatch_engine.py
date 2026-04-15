@@ -1,42 +1,47 @@
 import time
-from typing import Optional
+from db_connection import db_instance
 
-class Order:
-    def __init__(self, order_id, src, dst, priority="LOW"):
-        self.order_id = order_id
-        self.src = src
-        self.dst = dst
-        self.priority = priority # HIGH or LOW
-        self.status = "PENDING"  # PENDING, ASSIGNED, COMPLETED, DELAYED
-        self.assigned_vehicle = None
-
-class Vehicle:
-    def __init__(self, vid, current_node):
-        self.vid = vid
-        self.current_node = current_node
-        self.capacity_available = True
-        self.active_order: Optional[Order] = None
-        self.eta_minutes = 0.0
-        
 class RuleEngine:
     def __init__(self, pathfinder_ref):
         self.pathfinder = pathfinder_ref # Reference to query costs
         
-        # DB_TODO: Fetch vehicles from MongoDB 'vehicles' collection. 
-        # The '0' below represents a hard-coded starting location node. This should ideally be fetched from DB.
-        self.vehicles = [Vehicle(i, 0) for i in range(5)] # Mock 5 drivers
-        
-        # DB_TODO: Fetch/Push pending deliveries to MongoDB 'deliveries' collection
-        self.pending_orders = []
-        
-        # DB_TODO: Push event logs to MongoDB 'events' collection
-        self.logs = []
+        # Initialize default 5 drivers if DB is empty
+        from pymongo.errors import DuplicateKeyError
+        for i in range(5):
+            if not db_instance.vehicles.find_one({"vid": i}):
+                try:
+                    db_instance.vehicles.insert_one({
+                        "vid": i,
+                        "current_node": 0,
+                        "capacity_available": True,
+                        "active_order_id": None,
+                        "active_order_dst": None,
+                        "eta_minutes": 0.0
+                    })
+                except DuplicateKeyError:
+                    pass
+
+    def _log(self, message):
+        db_instance.events.insert_one({
+            "message": message,
+            "timestamp": time.time(),
+            "read": False
+        })
+        print(message) # Also print to console
 
     def submit_order(self, src, dst, priority="LOW"):
-        order_id = len(self.pending_orders) + 100
-        new_order = Order(order_id, src, dst, priority)
-        self.pending_orders.append(new_order)
-        self.logs.append(f"[EVENT] New Order {order_id} ({priority}) placed: Node {src} -> {dst}")
+        # Unique ID based on time to avoid concurrency collisions
+        order_id = int(time.time() * 1000)
+        
+        db_instance.deliveries.insert_one({
+            "order_id": order_id,
+            "src": src,
+            "dst": dst,
+            "priority": priority,
+            "status": "PENDING",
+            "assigned_vehicle": None
+        })
+        self._log(f"[EVENT] New Order {order_id} ({priority}) placed: Node {src} -> {dst}")
         return order_id
 
     def evaluate_rules(self):
@@ -51,38 +56,52 @@ class RuleEngine:
         """
         Rule: Simulate time passing. IF vehicle finishes route, flag capacity as available again to accept new maps.
         """
-        # We simulate a "chunk" of time passing every time the engine is evaluated via API ping
         time_step = 25.0 
         
-        for v in self.vehicles:
-            order = v.active_order
-            if not v.capacity_available and order:
-                v.eta_minutes -= time_step
+        # Get vehicles that are currently busy
+        busy_vehicles = db_instance.vehicles.find({"capacity_available": False})
+        
+        for v in busy_vehicles:
+            new_eta = max(0.0, v["eta_minutes"] - time_step)
+            
+            if new_eta <= 0.0:
+                self._log(f"[RULE FIRED] Vehicle {v['vid']} COMPLETED Order {v['active_order_id']}. Freeing capacity.")
                 
-                if v.eta_minutes <= 0.0:
-                    self.logs.append(f"[RULE FIRED] Vehicle {v.vid} COMPLETED Order {order.order_id}. Freeing capacity.")
-                    order.status = "COMPLETED"
-                    v.current_node = order.dst # Relocate to destination
-                    
-                    # Free up vehicle for next Rule Chain
-                    v.capacity_available = True
-                    v.active_order = None
+                # Update Delivery
+                db_instance.deliveries.update_one(
+                    {"order_id": v["active_order_id"]},
+                    {"$set": {"status": "COMPLETED"}}
+                )
+                
+                # Update Vehicle
+                db_instance.vehicles.update_one(
+                    {"_id": v["_id"]},
+                    {"$set": {
+                        "current_node": v["active_order_dst"],
+                        "capacity_available": True,
+                        "active_order_id": None,
+                        "active_order_dst": None,
+                        "eta_minutes": 0.0
+                    }}
+                )
+            else:
+                db_instance.vehicles.update_one(
+                    {"_id": v["_id"]},
+                    {"$set": {"eta_minutes": new_eta}}
+                )
 
     def _check_delays(self):
         """
         Rule: IF vehicle.delay > 20 mins THEN reassign / flag delayed
         """
-        tasks = []
-        active_vehicles = []
-        for v in self.vehicles:
-            order = v.active_order
-            if not v.capacity_available and order:
-                tasks.append((v.current_node, order.dst, order.order_id, v.vid))
-                active_vehicles.append((v, order))
-                
-        if not tasks:
+        busy_vehicles = list(db_instance.vehicles.find({"capacity_available": False}))
+        if not busy_vehicles:
             return
             
+        tasks = []
+        for v in busy_vehicles:
+            tasks.append((v["current_node"], v["active_order_dst"], v["active_order_id"], v["vid"]))
+                
         if hasattr(self, 'mpi_pool') and self.mpi_pool is not None:
             results = self.mpi_pool.compute_batch(tasks)
             costs = {res["v_id"]: res["cost"] for res in results}
@@ -92,33 +111,49 @@ class RuleEngine:
                  c, _ = self.pathfinder.compute_shortest_path(v_curr, o_dst, record_ui=False)
                  costs[v_id] = c
 
-        for v, order in active_vehicles:
-            current_cost = costs[v.vid]
-            # If traffic suddenly spiked the ETA
-            if current_cost > v.eta_minutes + 20.0:
-                self.logs.append(f"[RULE FIRED] Vehicle {v.vid} delayed by Traffic! Reassigning Order {order.order_id}")
-                order.status = "DELAYED"
-                order.assigned_vehicle = None
-                self.pending_orders.append(order) # throw back in queue
-                v.capacity_available = True
-                v.active_order = None
+        for v in busy_vehicles:
+            current_cost = costs.get(v["vid"], 0.0)
+            
+            if current_cost > v["eta_minutes"] + 20.0:
+                self._log(f"[RULE FIRED] Vehicle {v['vid']} delayed by Traffic! Reassigning Order {v['active_order_id']}")
+                
+                # Re-queue the delivery
+                db_instance.deliveries.update_one(
+                    {"order_id": v["active_order_id"]},
+                    {"$set": {
+                        "status": "DELAYED",
+                        "assigned_vehicle": None
+                    }}
+                )
+                
+                # Free the vehicle
+                db_instance.vehicles.update_one(
+                    {"_id": v["_id"]},
+                    {"$set": {
+                        "capacity_available": True,
+                        "active_order_id": None,
+                        "active_order_dst": None
+                    }}
+                )
 
     def _assign_orders(self):
         """
         Rule: IF order.priority == HIGH AND vehicle.capacity_available THEN assign immediately
         Fallback: Assign LOW priority if capacity available.
         """
-        # Sort so HIGH priority orders are evaluated first (Forward Chain priority)
-        self.pending_orders.sort(key=lambda x: 0 if x.priority == "HIGH" else 1)
+        # Fetch pending/delayed orders, sorted so HIGH priority evaluate first
+        pending_orders = list(db_instance.deliveries.find({"status": {"$in": ["PENDING", "DELAYED"]}}))
+        pending_orders.sort(key=lambda x: 0 if x.get("priority") == "HIGH" else 1)
 
-        available_vehicles = [v for v in self.vehicles if v.capacity_available]
-        if not available_vehicles or not self.pending_orders:
+        available_vehicles = list(db_instance.vehicles.find({"capacity_available": True}))
+        
+        if not available_vehicles or not pending_orders:
             return
             
         tasks = []
-        for order in self.pending_orders:
+        for order in pending_orders:
             for v in available_vehicles:
-                tasks.append((v.current_node, order.src, order.order_id, v.vid))
+                tasks.append((v["current_node"], order["src"], order["order_id"], v["vid"]))
                 
         if hasattr(self, 'mpi_pool') and self.mpi_pool is not None:
             results = self.mpi_pool.compute_batch(tasks)
@@ -132,31 +167,40 @@ class RuleEngine:
         for r in results:
             order_costs.setdefault(r["order_id"], []).append((r["v_id"], r["cost"]))
 
-        unassigned = []
-        for order in self.pending_orders:
-            assigned = False
-            v_costs = order_costs.get(order.order_id, [])
+        for order in pending_orders:
+            available_vehicles = list(db_instance.vehicles.find({"capacity_available": True}))
+            if not available_vehicles:
+                break
+                
+            v_costs = order_costs.get(order["order_id"], [])
             v_costs.sort(key=lambda x: x[1]) # Sort by lowest dispatch cost
             
             for v_id, cost in v_costs:
-                v = next((x for x in self.vehicles if x.vid == v_id), None)
-                if v and v.capacity_available:
-                    # Assume threshold heuristic: Nearest vehicle under 50 mins away gets it
-                    if cost < 50.0 or order.priority == "HIGH": 
-                        # HIGH priority bypasses distance threshold entirely! Rule 1 logic
-                        v.capacity_available = False
-                        v.active_order = order
-                        order.assigned_vehicle = v.vid
-                        order.status = "ASSIGNED"
+                v = next((x for x in available_vehicles if x["vid"] == v_id), None)
+                if v:
+                    if cost < 50.0 or order.get("priority") == "HIGH": 
+                        delivery_cost, route = self.pathfinder.compute_shortest_path(
+                            order["src"], order["dst"], record_ui=True, priority=order.get("priority")
+                        )
+                        eta = cost + delivery_cost
                         
-                        # Full route cost (Vehicle -> Src -> Dst)
-                        delivery_cost, route = self.pathfinder.compute_shortest_path(order.src, order.dst, record_ui=True, priority=order.priority)
-                        v.eta_minutes = cost + delivery_cost
+                        db_instance.vehicles.update_one(
+                            {"_id": v["_id"]},
+                            {"$set": {
+                                "capacity_available": False,
+                                "active_order_id": order["order_id"],
+                                "active_order_dst": order["dst"],
+                                "eta_minutes": eta
+                            }}
+                        )
                         
-                        self.logs.append(f"[RULE FIRED] Assigned Order {order.order_id} ({order.priority}) to Vehicle {v.vid}. ETA: {v.eta_minutes:.1f}m")
-                        assigned = True
+                        db_instance.deliveries.update_one(
+                            {"_id": order["_id"]},
+                            {"$set": {
+                                "assigned_vehicle": v["vid"],
+                                "status": "ASSIGNED"
+                            }}
+                        )
+                        
+                        self._log(f"[RULE FIRED] Assigned Order {order['order_id']} ({order.get('priority')}) to Vehicle {v['vid']}. ETA: {eta:.1f}m")
                         break
-            if not assigned:
-                unassigned.append(order)
-                
-        self.pending_orders = unassigned

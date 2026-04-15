@@ -1,6 +1,7 @@
 import networkx as nx
 import random
 from dispatch_engine import RuleEngine
+from db_connection import db_instance
 
 class PathFinder:
     def __init__(self, num_nodes=50, seed=42):
@@ -8,8 +9,7 @@ class PathFinder:
         self.graph = nx.Graph()
         self.random_state = random.Random(seed)
         
-        # DB_TODO: Fetch/Push active routing states to MongoDB 'routes' collection
-        self.active_deliveries = [] # Track real-time routes
+        # Real-time routes are now written to MongoDB 'routes' collection
         self._generate_mock_graph()
         self.engine = RuleEngine(self)
 
@@ -70,18 +70,15 @@ class PathFinder:
             # Register active delivery for UI animation tracking, IF authorized by engine
             if record_ui:
                 import time
-                self.active_deliveries.append({
+                db_instance.routes.insert_one({
                     "id": int(time.time() * 1000) + self.random_state.randint(0, 10000),
                     "src": src,
                     "dst": dst,
                     "route": route,
                     "cost": cost,
-                    "priority": priority
+                    "priority": priority,
+                    "read": False
                 })
-                
-                # Keep array clean for UI (keep last 100 max for memory)
-                if len(self.active_deliveries) > 100:
-                    self.active_deliveries.pop(0)
 
             return cost, route
         except nx.NetworkXNoPath:

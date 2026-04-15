@@ -1,5 +1,6 @@
 from mpi4py import MPI
 import time
+from db_connection import db_instance
 
 class MPIPool:
     def __init__(self, pathfinder_ref):
@@ -72,15 +73,32 @@ class MPIPool:
         tasks is a list of tuples: (src, dst, order_id, v_id)
         Returns a flattened list of all results.
         """
+        if not tasks:
+            return []
+
         if self.size <= 1:
             # Fallback to sequential if only 1 node
+            start_seq = time.time()
             results = []
             for src, dst, order_id, v_id in tasks:
                  cost, _ = self.pathfinder.compute_shortest_path(src, dst, record_ui=False)
                  results.append({"order_id": order_id, "v_id": v_id, "cost": cost})
+            end_seq = time.time()
+            if self.is_master():
+                db_instance.performance_metrics.update_one(
+                    {"_id": "global_stats"},
+                    {"$set": {"last_seq_time": end_seq - start_seq, "last_parallel_time": end_seq - start_seq}}
+                )
             return results
             
-        # 1. Distribute tasks among workers
+        # 1. Estimate sequential time by timing one real sample
+        t0 = time.time()
+        self.pathfinder.compute_shortest_path(tasks[0][0], tasks[0][1], record_ui=False)
+        t1 = time.time()
+        single_cost_time = max(0.0001, t1 - t0)
+        estimated_seq_time = single_cost_time * len(tasks)
+
+        # 2. Distribute tasks among workers
         num_workers = self.get_num_workers()
         chunks = [[] for _ in range(self.size)] # rank 0 gets []
         
@@ -88,19 +106,28 @@ class MPIPool:
             worker_id = (i % num_workers) + 1
             chunks[worker_id].append(task)
             
-        # 2. Tell workers to prepare for batch computing
+        start_par = time.time()
+        
+        # 3. Tell workers to prepare for batch computing
         self.comm.bcast("COMPUTE_BATCH", root=0)
         
-        # 3. Scatter the chunks
+        # 4. Scatter the chunks
         self.comm.scatter(chunks, root=0)
         
-        # 4. Gather the results
-        # Master sends its own empty chunk and gets back list of lists
+        # 5. Gather the results
         gathered = self.comm.gather([], root=0)
+        end_par = time.time()
+        parallel_time = max(0.001, end_par - start_par)
         
-        # 5. Flatten results from all workers (ignoring rank 0's empty list)
+        # 6. Flatten results from all workers
         flattened = []
         for worker_res in gathered:
             flattened.extend(worker_res)
+            
+        # 7. Record Metrics
+        db_instance.performance_metrics.update_one(
+            {"_id": "global_stats"},
+            {"$set": {"last_seq_time": estimated_seq_time, "last_parallel_time": parallel_time}}
+        )
             
         return flattened
