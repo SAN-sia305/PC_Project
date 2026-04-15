@@ -1,21 +1,44 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 
-const API = 'http://127.0.0.1:8090';
+const API = 'http://127.0.0.1:8000';
 const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
 
 const STATUS_COLOR = {
   COMPLETED: 'var(--neon-green)',
-  DELAYED: 'var(--neon-red)',
-  ASSIGNED: '#ff8c00',
-  PENDING: '#888',
+  DELAYED:   'var(--neon-red)',
+  ASSIGNED:  '#ff8c00',
+  PENDING:   '#888',
+  FAILED:    '#ff003c',
+};
+
+const ALLOWED_STATUSES = ['ASSIGNED', 'COMPLETED', 'FAILED', 'DELAYED', 'PENDING'];
+
+// Shows live countdown to ETA; blanks out once complete
+const EtaCell = ({ dispatchedAt, etaMinutes }) => {
+  const [remaining, setRemaining] = React.useState('');
+  React.useEffect(() => {
+    if (!dispatchedAt || !etaMinutes) { setRemaining('—'); return; }
+    const tick = () => {
+      const elapsedSec = (Date.now() / 1000) - dispatchedAt;
+      const remainSec  = etaMinutes * 60 - elapsedSec;
+      if (remainSec <= 0) { setRemaining('ETA PASSED'); return; }
+      const m = Math.floor(remainSec / 60);
+      const s = Math.floor(remainSec % 60);
+      setRemaining(`${m}m ${s}s`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [dispatchedAt, etaMinutes]);
+  return <span style={{ color: remaining === 'ETA PASSED' ? '#555' : '#aaa', fontSize: '11px' }}>{remaining}</span>;
 };
 
 const VOLUME_PRESETS = [
   { label: 'PARCEL', value: 10 },
   { label: 'PALLET', value: 40 },
-  { label: 'HALF', value: 60 },
-  { label: 'FULL', value: 100 },
+  { label: 'HALF',   value: 60 },
+  { label: 'FULL',   value: 100 },
 ];
 
 /* ─── Geocoding Search Field ─── */
@@ -90,6 +113,8 @@ const Orders = ({ isSimulating }) => {
   const [orders, setOrders] = useState([]);
   const [srcCoords, setSrcCoords] = useState(null);
   const [dstCoords, setDstCoords] = useState(null);
+  const [srcName, setSrcName]     = useState('');
+  const [dstName, setDstName]     = useState('');
   const [volume, setVolume]       = useState(30);
   const [priority, setPriority]   = useState('LOW');
 
@@ -111,6 +136,19 @@ const Orders = ({ isSimulating }) => {
     interval = setInterval(fetchOrders, 3000);
     return () => clearInterval(interval);
   }, []);
+
+  const [editingStatus, setEditingStatus] = useState(null); // order_id being edited
+
+  const updateStatus = async (orderId, newStatus) => {
+    try {
+      await axios.patch(`${API}/api/orders/${orderId}/status`, { status: newStatus });
+      // Optimistically update local state immediately
+      setOrders(prev => prev.map(o => o.order_id === orderId ? { ...o, status: newStatus } : o));
+    } catch (err) {
+      console.error('Status update failed', err);
+    }
+    setEditingStatus(null);
+  };
 
   const canQuote = srcCoords && dstCoords;
 
@@ -146,6 +184,8 @@ const Orders = ({ isSimulating }) => {
         eta_minutes: quote.eta_minutes,
         path_cost: quote.path_cost,
         priority,
+        src_name: srcName,
+        dst_name: dstName,
       };
       const res = await axios.post(`${API}/api/confirm-dispatch`, payload);
       setDispatchResult(res.data);
@@ -179,14 +219,14 @@ const Orders = ({ isSimulating }) => {
         <LocationSearch
           label="PICKUP LOCATION"
           tag="Gandhipuram Bus Stand"
-          onSelect={(coords) => { setSrcCoords(coords); handleReset(); }}
+          onSelect={(coords) => { setSrcCoords(coords); setSrcName(coords.name || ''); handleReset(); }}
         />
 
         {/* Destination */}
         <LocationSearch
           label="DELIVERY DESTINATION"
           tag="Peelamedu Airport"
-          onSelect={(coords) => { setDstCoords(coords); handleReset(); }}
+          onSelect={(coords) => { setDstCoords(coords); setDstName(coords.name || ''); handleReset(); }}
         />
 
         {/* Volume */}
@@ -328,11 +368,12 @@ const Orders = ({ isSimulating }) => {
             <thead style={{ position: 'sticky', top: 0, background: '#111', borderBottom: '1px solid var(--neon-green)' }}>
               <tr>
                 <th style={{ padding: '12px 10px' }}>ORDER_ID</th>
-                <th style={{ padding: '12px 10px' }}>SRC</th>
-                <th style={{ padding: '12px 10px' }}>DST</th>
+                <th style={{ padding: '12px 10px' }}>PICKUP</th>
+                <th style={{ padding: '12px 10px' }}>DESTINATION</th>
                 <th style={{ padding: '12px 10px' }}>VOL</th>
                 <th style={{ padding: '12px 10px' }}>LEVEL</th>
                 <th style={{ padding: '12px 10px' }}>DRIVER</th>
+                <th style={{ padding: '12px 10px' }}>ETA</th>
                 <th style={{ padding: '12px 10px' }}>STATUS</th>
               </tr>
             </thead>
@@ -340,8 +381,12 @@ const Orders = ({ isSimulating }) => {
               {orders.map((o, idx) => (
                 <tr key={o.order_id || idx} style={{ borderBottom: '1px solid #1a1a1a' }} className="orders-row">
                   <td style={{ padding: '10px', color: '#555', fontSize: '11px' }}>#{String(o.order_id).slice(-6)}</td>
-                  <td style={{ padding: '10px' }}>{o.src}</td>
-                  <td style={{ padding: '10px' }}>{o.dst}</td>
+                  <td style={{ padding: '10px', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.src_name || o.src}>
+                    {o.src_name || `Node ${o.src}`}
+                  </td>
+                  <td style={{ padding: '10px', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.dst_name || o.dst}>
+                    {o.dst_name || `Node ${o.dst}`}
+                  </td>
                   <td style={{ padding: '10px', color: '#aaa' }}>{o.volume ?? '—'}</td>
                   <td style={{ padding: '10px', color: o.priority === 'HIGH' ? 'var(--neon-red)' : '#666' }}>
                     {o.priority === 'HIGH' ? 'EXPRESS' : 'STD'}
@@ -349,14 +394,56 @@ const Orders = ({ isSimulating }) => {
                   <td style={{ padding: '10px', color: 'var(--neon-green)' }}>
                     {o.assigned_vehicle != null ? `V_${o.assigned_vehicle}` : '—'}
                   </td>
-                  <td style={{ padding: '10px', color: STATUS_COLOR[o.status] || '#fff', fontWeight: 'bold' }}>
-                    {o.status}
+                  <td style={{ padding: '10px' }}>
+                    <EtaCell dispatchedAt={o.dispatched_at} etaMinutes={o.eta_minutes} />
+                  </td>
+                  <td style={{ padding: '8px 10px' }}>
+                    {editingStatus === o.order_id ? (
+                      <select
+                        autoFocus
+                        defaultValue={o.status}
+                        onBlur={() => setEditingStatus(null)}
+                        onChange={(e) => updateStatus(o.order_id, e.target.value)}
+                        style={{
+                          background: '#0d0d0d',
+                          border: `1px solid ${STATUS_COLOR[o.status] || '#fff'}`,
+                          color: STATUS_COLOR[o.status] || '#fff',
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: '12px',
+                          padding: '4px 6px',
+                          cursor: 'pointer',
+                          outline: 'none',
+                          width: '100%',
+                        }}
+                      >
+                        {ALLOWED_STATUSES.map(s => (
+                          <option key={s} value={s} style={{ background: '#0d0d0d', color: STATUS_COLOR[s] || '#fff' }}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span
+                        onClick={() => setEditingStatus(o.order_id)}
+                        title="Click to change status"
+                        style={{
+                          color: STATUS_COLOR[o.status] || '#fff',
+                          fontWeight: 'bold',
+                          cursor: 'pointer',
+                          borderBottom: '1px dashed ' + (STATUS_COLOR[o.status] || '#555'),
+                          paddingBottom: '1px',
+                          userSelect: 'none',
+                        }}
+                      >
+                        {o.status}
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}
               {orders.length === 0 && (
                 <tr>
-                  <td colSpan="7" style={{ padding: '30px', textAlign: 'center', color: '#333' }}>
+                  <td colSpan="8" style={{ padding: '30px', textAlign: 'center', color: '#333' }}>
                     AWAITING INPUT — NO RECORDS FOUND
                   </td>
                 </tr>

@@ -44,15 +44,28 @@ async def function_loop():
         pathfinder.engine.evaluate_rules()
         
         # Calculate derived metrics to update the global_stats for UI
-        # Delayed counts is simply the number of delayed orders in the DB
         delayed_count = db_instance.deliveries.count_documents({"status": "DELAYED"})
-        
-        # We can update this count constantly
         db_instance.performance_metrics.update_one(
             {"_id": "global_stats"},
             {"$set": {"total_delayed": delayed_count}}
         )
-        
+
+        # Auto-complete orders that have passed their ETA
+        now = time.time()
+        overdue = db_instance.deliveries.find({
+            "status": "ASSIGNED",
+            "dispatched_at": {"$exists": True},
+            "eta_minutes": {"$exists": True}
+        })
+        for order in overdue:
+            eta_secs = order["eta_minutes"] * 60
+            if now >= order["dispatched_at"] + eta_secs:
+                db_instance.deliveries.update_one(
+                    {"order_id": order["order_id"]},
+                    {"$set": {"status": "COMPLETED"}}
+                )
+                pathfinder.engine._log(f"[AUTO] Order {order['order_id']} marked COMPLETED (ETA elapsed).")
+
         await asyncio.sleep(2) # Tick the engine every 2 seconds
 
 from contextlib import asynccontextmanager
@@ -163,6 +176,8 @@ class ConfirmDispatchRequest(BaseModel):
     vehicle_id: int
     eta_minutes: float
     path_cost: float
+    src_name: str = ""
+    dst_name: str = ""
 
 @app.post("/create-order")
 def create_order(req: OrderRequest):
@@ -274,10 +289,14 @@ def confirm_dispatch(req: ConfirmDispatchRequest):
         "order_id": order_id,
         "src": req.src_node,
         "dst": req.dst_node,
-        "priority": "HIGH",
-        "status": "ASSIGNED", # Skip PENDING
+        "src_name": req.src_name or f"Node {req.src_node}",
+        "dst_name": req.dst_name or f"Node {req.dst_node}",
+        "priority": req.priority if hasattr(req, 'priority') else "HIGH",
+        "status": "ASSIGNED",
         "assigned_vehicle": req.vehicle_id,
-        "volume": req.volume
+        "volume": req.volume,
+        "dispatched_at": time.time(),
+        "eta_minutes": req.eta_minutes
     })
     
     # Calculate route for UI visualization
@@ -317,6 +336,29 @@ def get_orders():
         doc.pop('_id', None)
         data.append(doc)
     return {"orders": data}
+
+VALID_STATUSES = {"PENDING", "ASSIGNED", "COMPLETED", "FAILED", "DELAYED"}
+
+class StatusUpdateRequest(BaseModel):
+    status: str
+
+@app.patch("/api/orders/{order_id}/status")
+def update_order_status(order_id: int, req: StatusUpdateRequest):
+    """
+    Manually override the status of any delivery order.
+    """
+    if req.status not in VALID_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {VALID_STATUSES}")
+
+    result = db_instance.deliveries.update_one(
+        {"order_id": order_id},
+        {"$set": {"status": req.status}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    pathfinder.engine._log(f"[MANUAL] Order {order_id} status → {req.status}")
+    return {"status": "success", "order_id": order_id, "new_status": req.status}
 
 @app.get("/engine-state")
 def get_engine_state():

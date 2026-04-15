@@ -12,7 +12,7 @@ const NetworkGraph = ({ isSimulating, terminalLogs }) => {
   useEffect(() => {
     const initMap = async () => {
       try {
-        const response = await axios.get('http://127.0.0.1:8090/graph-status');
+        const response = await axios.get('http://127.0.0.1:8000/graph-data');
         const data = response.data;
         
         // React 18 StrictMode Protection:
@@ -125,7 +125,7 @@ const NetworkGraph = ({ isSimulating, terminalLogs }) => {
               .addTo(map);
 
             try {
-              await axios.post('http://127.0.0.1:8090/create-order', { lat, lon, priority: 'HIGH' });
+              await axios.post('http://127.0.0.1:8000/create-order', { lat, lon, priority: 'HIGH' });
               // Remove marker after 30 seconds
               setTimeout(() => marker.remove(), 30000);
             } catch (err) {
@@ -160,7 +160,7 @@ const NetworkGraph = ({ isSimulating, terminalLogs }) => {
     if (isSimulating) {
       interval = setInterval(async () => {
         try {
-          const res = await axios.get("http://127.0.0.1:8090/active-deliveries");
+          const res = await axios.get("http://127.0.0.1:8000/active-deliveries");
           if (res.data.deliveries?.length > 0) {
             if (processedDeliveries.current.size > 2000) processedDeliveries.current.clear();
             

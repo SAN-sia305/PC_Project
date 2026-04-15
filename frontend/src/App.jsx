@@ -22,44 +22,47 @@ function App() {
   const [isSimulating, setIsSimulating] = useState(false);
   const [deliveriesCount, setDeliveriesCount] = useState(100);
 
-  // Poll system stats globally
+  // Always poll /engine-state on mount — no isSimulating gate needed
   useEffect(() => {
-    let interval;
-    if (isSimulating) {
-      interval = setInterval(async () => {
-        try {
-          const response = await axios.get("http://127.0.0.1:8090/system-stats");
-          if (response.data?.metrics) {
-            setMetrics(response.data.metrics);
-            
-            // Append new logs
-            if (response.data.metrics.recent_logs?.length > 0) {
-              setTerminalLogs(prev => {
-                const newLogs = response.data.metrics.recent_logs.map(log => ({ msg: log }));
-                const combined = [...prev, ...newLogs];
-                // Keep only last 100 logs
-                return combined.slice(-100);
-              });
-            }
-          }
-        } catch (e) {
-          console.warn("Poll missed", e);
-        }
-      }, 1500);
-    }
-    return () => clearInterval(interval);
-  }, [isSimulating]);
+    const poll = async () => {
+      try {
+        const response = await axios.get("http://127.0.0.1:8000/engine-state");
+        const data = response.data;
 
-  const handleRunSimulation = async () => {
-    setIsSimulating(true);
-    setTerminalLogs([{ msg: "> INITIATING MPI SUBROUTINES..." }]);
-    try {
-      await axios.get(`http://127.0.0.1:8090/run-simulation?deliveries=${deliveriesCount}`);
-      setTerminalLogs(prev => [...prev, { msg: "> SYSTEM LIVE. POLLING RULE ENGINE..." }]);
-    } catch (e) {
-      setTerminalLogs(prev => [...prev, { msg: "> ERR: SYS_CORE_OFFLINE" }]);
-      setIsSimulating(false);
-    }
+        setMetrics({
+          pending_orders:       data.pending_orders       ?? 0,
+          active_vehicles:      data.active_vehicles      ?? 0,
+          completed_deliveries: data.completed_deliveries ?? 0,
+          delayed:              data.delayed_tasks        ?? 0,
+          fuel_used:            data.total_fuel           ?? 0.0,
+          parallel_time:        data.last_parallel_time   ?? 0.0,
+          seq_time:             data.last_seq_time        ?? 0.0,
+          recent_logs:          data.recent_logs          ?? [],
+        });
+
+        // Auto-mark engine as online on first successful response
+        setIsSimulating(true);
+
+        // Append new rule engine logs to terminal stream
+        if (data.recent_logs?.length > 0) {
+          setTerminalLogs(prev => {
+            const newLogs = data.recent_logs.map(log => ({ msg: log }));
+            const combined = [...prev, ...newLogs];
+            return combined.slice(-200);
+          });
+        }
+      } catch (e) {
+        // Engine offline — silently retry
+      }
+    };
+
+    poll(); // immediate first call
+    const interval = setInterval(poll, 2000);
+    return () => clearInterval(interval);
+  }, []); // runs once on mount
+
+  const handleRunSimulation = () => {
+    setTerminalLogs(prev => [...prev, { msg: "> ENGINE STATUS CONFIRMED. POLLING ACTIVE." }]);
   };
 
   return (
