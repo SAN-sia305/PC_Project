@@ -15,28 +15,66 @@ class PathFinder:
 
     def _generate_mock_graph(self):
         """
-        Creates a connected Erdős-Rényi graph or similar simple network to ensure connectivity.
+        Creates an authentic road network representing real streets using OSMnx.
         Assigns 'base_time' and 'traffic_factor' attributes to all edges.
-        Assigns Lat/Lon coordinates mapped to Tamil Nadu region for Leaflet UI mapping.
         """
-        # A simple connected network for tests
-        # Barabasi-Albert guarantees a single connected component
-        self.graph = nx.barabasi_albert_graph(self.num_nodes, 3, seed=self.random_state.randint(0, 1000))
-        
-        # DB_TODO: Fetch map topological constraints from MongoDB 'traffic_conditions' or 'routes' collection instead of hardcoding bounding box.
-        # Approximate Bounding Box for Tamil Nadu, India
-        LAT_MIN, LAT_MAX = 8.5, 13.5
-        LON_MIN, LON_MAX = 76.2, 80.3
-        
-        for n in self.graph.nodes():
-            self.graph.nodes[n]['lat'] = self.random_state.uniform(LAT_MIN, LAT_MAX)
-            self.graph.nodes[n]['lon'] = self.random_state.uniform(LON_MIN, LON_MAX)
-        
-        for u, v in self.graph.edges():
-            # Distance / Base cost mapping between 10 to 100 mins
-            base_time = self.random_state.uniform(10.0, 100.0)
-            self.graph[u][v]['base_time'] = base_time
-            self.graph[u][v]['traffic_factor'] = 1.0
+        try:
+            import osmnx as ox
+            print("> DOWNLOADING REAL-TIME OSMNX STREET GRAPH FOR COIMBATORE... (This might take 10 seconds)", flush=True)
+            # Disable cache to avoid MPI 4-process simultaneous lock deadlocks
+            ox.settings.use_cache = False
+            
+            # Focused Bounding Box for Coimbatore (Gandhipuram Area)
+            center_point = (11.0168, 76.9558) 
+            G = ox.graph_from_point(center_point, dist=2500, network_type='drive')
+            
+            # Map MultiDiGraph to simple generic Graph for our simplistic inference engine
+            self.graph = nx.Graph(G)
+            self.num_nodes = len(self.graph.nodes)
+            
+            # Remap osmnx node IDs to 0...N range
+            mapping = {old_label: new_label for new_label, old_label in enumerate(self.graph.nodes())}
+            self.graph = nx.relabel_nodes(self.graph, mapping)
+            
+            for n, data in self.graph.nodes(data=True):
+                data['lat'] = data.get('y', 11.01)
+                data['lon'] = data.get('x', 76.95)
+                
+            for u, v, data in self.graph.edges(data=True):
+                dist_m = data.get('length', 100.0)
+                # Assume 40 km/h avg speed -> ~666 meters per minute
+                base_time = max(1.0, dist_m / 666.0)
+                self.graph[u][v]['base_time'] = base_time
+                self.graph[u][v]['traffic_factor'] = 1.0
+                
+            print(f"> OSMNX GRAPH CONSTRUCTED. SYSTEM LOADED WITH {self.num_nodes} REAL INTERSECTIONS.", flush=True)
+            
+        except Exception as e:
+            print(f"> OSMNX FETCH FAILED, FALLING BACK TO DEV MOCK: {e}", flush=True)
+            self.graph = nx.barabasi_albert_graph(self.num_nodes, 3, seed=self.random_state.randint(0, 1000))
+            
+            LAT_MIN, LAT_MAX = 10.9, 11.1
+            LON_MIN, LON_MAX = 76.9, 77.0
+            
+            for n in self.graph.nodes():
+                self.graph.nodes[n]['lat'] = self.random_state.uniform(LAT_MIN, LAT_MAX)
+                self.graph.nodes[n]['lon'] = self.random_state.uniform(LON_MIN, LON_MAX)
+            
+            for u, v in self.graph.edges():
+                base_time = self.random_state.uniform(1.0, 10.0)
+                self.graph[u][v]['base_time'] = base_time
+                self.graph[u][v]['traffic_factor'] = 1.0
+
+    def get_nearest_node(self, lat, lon):
+        from scipy.spatial import KDTree
+        if not hasattr(self, 'kdtree'):
+            coords = []
+            for n in range(self.num_nodes):
+                coords.append((self.graph.nodes[n]['lat'], self.graph.nodes[n]['lon']))
+            self.kdtree = KDTree(coords)
+            
+        distance, idx = self.kdtree.query((lat, lon))
+        return int(idx)
             
     def apply_traffic(self, max_multiplier=3.0):
         """

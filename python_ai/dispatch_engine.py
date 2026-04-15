@@ -13,7 +13,8 @@ class RuleEngine:
                     db_instance.vehicles.insert_one({
                         "vid": i,
                         "current_node": 0,
-                        "capacity_available": True,
+                        "max_volume": 100,
+                        "current_volume": 0,
                         "active_order_id": None,
                         "active_order_dst": None,
                         "eta_minutes": 0.0
@@ -54,40 +55,71 @@ class RuleEngine:
         
     def _complete_orders(self):
         """
-        Rule: Simulate time passing. IF vehicle finishes route, flag capacity as available again to accept new maps.
+        Advance vehicle dynamically along the physical path to represent realistic movement.
         """
-        time_step = 25.0 
-        
-        # Get vehicles that are currently busy
+        time_step = 2.0  # Actual seconds since last tick
+        simulation_speedup = 30.0 # 1 real sec = 30 sim secs
+
         busy_vehicles = db_instance.vehicles.find({"capacity_available": False})
         
         for v in busy_vehicles:
-            new_eta = max(0.0, v["eta_minutes"] - time_step)
+            route = v.get("route", [])
+            leg = v.get("current_leg", 0)
             
-            if new_eta <= 0.0:
+            if not route or leg >= len(route) - 1:
+                # COMPLETED
                 self._log(f"[RULE FIRED] Vehicle {v['vid']} COMPLETED Order {v['active_order_id']}. Freeing capacity.")
-                
-                # Update Delivery
                 db_instance.deliveries.update_one(
-                    {"order_id": v["active_order_id"]},
-                    {"$set": {"status": "COMPLETED"}}
+                     {"order_id": v["active_order_id"]},
+                     {"$set": {"status": "COMPLETED"}}
                 )
-                
-                # Update Vehicle
                 db_instance.vehicles.update_one(
-                    {"_id": v["_id"]},
-                    {"$set": {
-                        "current_node": v["active_order_dst"],
-                        "capacity_available": True,
-                        "active_order_id": None,
-                        "active_order_dst": None,
-                        "eta_minutes": 0.0
-                    }}
+                     {"_id": v["_id"]},
+                     {"$set": {
+                         "current_node": v["active_order_dst"],
+                         "capacity_available": True,
+                         "current_volume": 0,
+                         "active_order_id": None,
+                         "active_order_dst": None,
+                         "route": [],
+                         "expected_cost": 0.0
+                     }}
+                )
+                continue
+                
+            # Current edge progress
+            src_node = route[leg]
+            dst_node = route[leg+1]
+            
+            # Fetch base_time and traffic factor
+            edge_data = self.pathfinder.graph.get_edge_data(src_node, dst_node)
+            if edge_data is None: 
+                 edge_data = {'base_time': 1.0, 'traffic_factor': 1.0}
+            
+            cost_of_leg = edge_data.get('base_time', 1.0) * edge_data.get('traffic_factor', 1.0)
+            
+            # Simulated minutes advanced
+            progress_made_mins = (time_step * simulation_speedup) / 60.0
+            
+            # Add to route_progress
+            new_prog = v.get("route_progress", 0.0) + (progress_made_mins / max(0.1, cost_of_leg))
+            
+            if new_prog >= 1.0:
+                # Passed the node
+                db_instance.vehicles.update_one(
+                     {"_id": v["_id"]},
+                     {"$set": {
+                         "current_node": dst_node,
+                         "current_leg": leg + 1,
+                         "route_progress": 0.0
+                     }}
                 )
             else:
                 db_instance.vehicles.update_one(
-                    {"_id": v["_id"]},
-                    {"$set": {"eta_minutes": new_eta}}
+                     {"_id": v["_id"]},
+                     {"$set": {
+                         "route_progress": new_prog
+                     }}
                 )
 
     def _check_delays(self):
@@ -113,8 +145,10 @@ class RuleEngine:
 
         for v in busy_vehicles:
             current_cost = costs.get(v["vid"], 0.0)
+            expected = v.get("expected_cost", 0.0)
             
-            if current_cost > v["eta_minutes"] + 20.0:
+            # Compare fresh traffic cost against the original expected cost
+            if expected > 0 and current_cost > expected + 20.0:
                 self._log(f"[RULE FIRED] Vehicle {v['vid']} delayed by Traffic! Reassigning Order {v['active_order_id']}")
                 
                 # Re-queue the delivery
@@ -132,7 +166,8 @@ class RuleEngine:
                     {"$set": {
                         "capacity_available": True,
                         "active_order_id": None,
-                        "active_order_dst": None
+                        "active_order_dst": None,
+                        "expected_cost": 0.0
                     }}
                 )
 
@@ -190,7 +225,11 @@ class RuleEngine:
                                 "capacity_available": False,
                                 "active_order_id": order["order_id"],
                                 "active_order_dst": order["dst"],
-                                "eta_minutes": eta
+                                "eta_minutes": eta,
+                                "expected_cost": delivery_cost,
+                                "route": route,
+                                "current_leg": 0,
+                                "route_progress": 0.0
                             }}
                         )
                         

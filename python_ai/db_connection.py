@@ -1,9 +1,13 @@
 import os
+from dotenv import load_dotenv
 from pymongo import MongoClient
+
+# Load environment variables from .env
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
 
 # Fetch MongoDB URI from environment variable or use default local instance
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-DATABASE_NAME = os.getenv("MONGO_DB_NAME", "difm_dos_tn")
+DATABASE_NAME = os.getenv("MONGO_DB_NAME", "difm_dos")
 
 class Database:
     def __init__(self):

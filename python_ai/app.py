@@ -142,6 +142,182 @@ def bulk_orders(count: int = 100):
     })
     return {"status": "success", "orders_injected": count}
 
+from pydantic import BaseModel
+
+class OrderRequest(BaseModel):
+    lat: float
+    lon: float
+    priority: str = "LOW"
+    
+class QuoteRequest(BaseModel):
+    src_lat: float
+    src_lon: float
+    dst_lat: float
+    dst_lon: float
+    volume: int
+
+class ConfirmDispatchRequest(BaseModel):
+    src_node: int
+    dst_node: int
+    volume: int
+    vehicle_id: int
+    eta_minutes: float
+    path_cost: float
+
+@app.post("/create-order")
+def create_order(req: OrderRequest):
+    """
+    Live Custom Dispatcher API
+    Snaps GPS coordinates to the physical street network.
+    """
+    dst_node = pathfinder.get_nearest_node(req.lat, req.lon)
+    # Warehouse is centrally located (or node 0)
+    src_node = 0 
+    
+    if src_node == dst_node:
+        return {"status": "error", "message": "Destination too close to warehouse"}
+        
+    order_id = pathfinder.engine.submit_order(src_node, dst_node, req.priority)
+    return {"status": "success", "order_id": order_id, "dst_node": dst_node}
+
+@app.post("/api/quote-delivery")
+def quote_delivery(req: QuoteRequest):
+    import math
+
+    def haversine_km(lat1, lon1, lat2, lon2):
+        """Returns straight-line distance in km between two GPS points."""
+        R = 6371.0
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+        return R * 2 * math.asin(math.sqrt(a))
+
+    def realistic_eta_minutes(src_lat, src_lon, dst_lat, dst_lon):
+        """
+        Compute ETA in minutes using haversine distance + real-world speed model.
+        City (<30km): 30 km/h avg (traffic, signals)
+        Regional (<150km): 60 km/h avg (state highways)
+        Inter-city (>=150km): 80 km/h avg (national highway)
+        Applies 1.35x road-factor (roads are never straight-line).
+        """
+        dist_km = haversine_km(src_lat, src_lon, dst_lat, dst_lon)
+        road_dist_km = dist_km * 1.35  # Road factor
+
+        if dist_km < 30:
+            speed_kmh = 30.0   # City driving
+        elif dist_km < 150:
+            speed_kmh = 60.0   # State highway
+        else:
+            speed_kmh = 80.0   # National highway
+
+        return (road_dist_km / speed_kmh) * 60.0  # → minutes
+
+    # 1. Spatial Snapping (for graph routing visualization)
+    src_node = pathfinder.get_nearest_node(req.src_lat, req.src_lon)
+    dst_node = pathfinder.get_nearest_node(req.dst_lat, req.dst_lon)
+
+    # 2. Real-world delivery ETA from actual coordinates
+    delivery_eta = realistic_eta_minutes(req.src_lat, req.src_lon, req.dst_lat, req.dst_lon)
+
+    # Real distance (for display as path_cost in km)
+    delivery_dist_km = haversine_km(req.src_lat, req.src_lon, req.dst_lat, req.dst_lon) * 1.35
+
+    # 3. Fleet Scan — find vehicle with enough capacity
+    vehicles = list(db_instance.vehicles.find())
+    candidate = None
+    min_pickup_eta = float('inf')
+
+    for v in vehicles:
+        max_vol = v.get("max_volume", 100)
+        curr_vol = v.get("current_volume", 0)
+
+        if max_vol - curr_vol >= req.volume:
+            # Pickup ETA: real-world distance from vehicle's current node to src
+            v_node_data = pathfinder.graph.nodes.get(v["current_node"], {})
+            v_lat = v_node_data.get("lat", req.src_lat)
+            v_lon = v_node_data.get("lon", req.src_lon)
+            pickup_eta = realistic_eta_minutes(v_lat, v_lon, req.src_lat, req.src_lon)
+
+            if pickup_eta < min_pickup_eta:
+                min_pickup_eta = pickup_eta
+                candidate = v
+
+    if candidate:
+        total_eta = min_pickup_eta + delivery_eta
+        return {
+            "status": "success",
+            "vehicle_id": candidate["vid"],
+            "eta_minutes": round(total_eta, 1),
+            "path_cost": round(delivery_dist_km, 1),   # Now in km (road distance)
+            "distance_km": round(delivery_dist_km, 1),
+            "src_node": src_node,
+            "dst_node": dst_node
+        }
+    else:
+        return {"status": "BUSY", "message": "WARNING: Global Fleet at Maximum Capacity. Estimated bottleneck 5-10 mins. Retry soon."}
+
+
+@app.post("/api/confirm-dispatch")
+def confirm_dispatch(req: ConfirmDispatchRequest):
+    """
+    Confirms the quote and explicitly dispatches to the pre-assigned vehicle.
+    """
+    order_id = int(time.time() * 1000)
+    
+    # Check if vehicle is still available
+    v = db_instance.vehicles.find_one({"vid": req.vehicle_id})
+    if not v or v.get("max_volume", 100) - v.get("current_volume", 0) < req.volume:
+        return {"status": "error", "message": "Vehicle no longer has capacity"}
+
+    # Insert delivery record
+    db_instance.deliveries.insert_one({
+        "order_id": order_id,
+        "src": req.src_node,
+        "dst": req.dst_node,
+        "priority": "HIGH",
+        "status": "ASSIGNED", # Skip PENDING
+        "assigned_vehicle": req.vehicle_id,
+        "volume": req.volume
+    })
+    
+    # Calculate route for UI visualization
+    delivery_cost, route = pathfinder.compute_shortest_path(req.src_node, req.dst_node, record_ui=True, priority="HIGH")
+
+    # Update vehicle strictly with new volume math
+    # If the vehicle already had a route, in reality we'd append or merge ways.
+    # For simplicity of the simulation update, we overwrite its active properties
+    # but increment current_volume.
+    db_instance.vehicles.update_one(
+        {"vid": req.vehicle_id},
+        {"$inc": {"current_volume": req.volume},
+         "$set": {
+            "capacity_available": False, # Setting to False triggers the engine's movement loop
+            "active_order_id": order_id,
+            "active_order_dst": req.dst_node,
+            "eta_minutes": req.eta_minutes,
+            "expected_cost": req.path_cost,
+            "route": route,
+            "current_leg": 0,
+            "route_progress": 0.0
+         }}
+    )
+    
+    pathfinder.engine._log(f"[QUOTE DISPATCH] Order {order_id} explicitly assigned to Vehicle {req.vehicle_id}. Vol: {req.volume}, ETA: {req.eta_minutes:.1f}m")
+    
+    return {"status": "success", "order_id": order_id, "vehicle_id": req.vehicle_id}
+
+@app.get("/orders")
+def get_orders():
+    """
+    Fetch the most recent 50 delivery orders directly from the Active Record DB.
+    """
+    orders_cursor = db_instance.deliveries.find().sort("order_id", -1).limit(50)
+    data = []
+    for doc in orders_cursor:
+        doc.pop('_id', None)
+        data.append(doc)
+    return {"orders": data}
+
 @app.get("/engine-state")
 def get_engine_state():
     """
@@ -191,6 +367,19 @@ def get_active_deliveries(clear: bool = False):
         db_instance.routes.update_many({"read": False}, {"$set": {"read": True}})
         
     return {"deliveries": deliveries}
+
+@app.get("/vehicles")
+def get_vehicles():
+    """
+    Returns the full live fleet status for the sidebar Fleet Status Hub.
+    """
+    vehicles_cursor = db_instance.vehicles.find()
+    data = []
+    for doc in vehicles_cursor:
+        doc.pop('_id', None)
+        data.append(doc)
+    return {"vehicles": data}
+
 
 if __name__ == "__main__":
     if mpi_pool.is_master():

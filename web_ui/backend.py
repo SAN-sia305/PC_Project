@@ -24,11 +24,11 @@ if MONGO_URI:
         mongodb_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
         mongodb_client.admin.command("ping")
         db = mongodb_client["pc_project_db"]
-        print("✅ Successfully connected to MongoDB Atlas!")
+        print("[SUCCESS] Successfully connected to MongoDB Atlas!")
     except Exception as e:
-        print(f"❌ Failed to connect to MongoDB: {e}")
+        print(f"[ERROR] Failed to connect to MongoDB: {e}")
 else:
-    print("⚠️ WARNING: MONGO_URI not found in .env file.")
+    print("[WARNING] MONGO_URI not found in .env file.")
 # ----------------------
 
 app.add_middleware(
@@ -53,6 +53,36 @@ async def run_simulation(deliveries: int = 100):
     except Exception as e:
         print(f"Failed to submit orders: {e}")
         return {"status": "error"}
+
+from pydantic import BaseModel
+class OrderRequest(BaseModel):
+    lat: float
+    lon: float
+    priority: str = "LOW"
+
+@app.post("/create-order")
+async def proxy_create_order(req: OrderRequest):
+    """
+    Reverse proxy to submit single live order to AI Engine
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post("http://127.0.0.1:8000/create-order", json=req.dict())
+            return resp.json()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/orders")
+async def proxy_orders():
+    """
+    Reverse proxy to fetch deliveries
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get("http://127.0.0.1:8000/orders")
+            return resp.json()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @app.get("/system-stats")
 async def fetch_system_stats():
@@ -105,6 +135,59 @@ async def fetch_active_deliveries():
             return resp.json()
     except Exception:
         return {"deliveries": []}
+
+@app.get("/vehicles")
+async def proxy_vehicles():
+    """
+    Reverse proxy to fetch live fleet vehicle states.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get("http://127.0.0.1:8000/vehicles")
+            return resp.json()
+    except Exception:
+        return {"vehicles": []}
+
+class QuoteRequest(BaseModel):
+    src_lat: float
+    src_lon: float
+    dst_lat: float
+    dst_lon: float
+    volume: int
+
+@app.post("/api/quote-delivery")
+async def proxy_quote_delivery(req: QuoteRequest):
+    """
+    Reverse proxy to the AI Engine's quotation endpoint.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post("http://127.0.0.1:8000/api/quote-delivery", json=req.dict())
+            return resp.json()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+class ConfirmDispatchRequest(BaseModel):
+    src_node: int
+    dst_node: int
+    volume: int
+    vehicle_id: int
+    eta_minutes: float
+    path_cost: float
+    priority: str = "LOW"
+
+@app.post("/api/confirm-dispatch")
+async def proxy_confirm_dispatch(req: ConfirmDispatchRequest):
+    """
+    Reverse proxy to confirm and commit a quoted dispatch.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post("http://127.0.0.1:8000/api/confirm-dispatch", json=req.dict())
+            return resp.json()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
